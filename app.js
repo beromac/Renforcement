@@ -3,7 +3,7 @@
   var D = window.DATA, Fig = window.Fig;
   var EX = {};
   D.exos.forEach(function (e) { EX[e.id] = e; });
-  var KEY = 'vitalite.v1';
+  var KEY = 'fitsante.v1';
 
   /* ---------- utilitaires ---------- */
   function $(s, r) { return (r || document).querySelector(s); }
@@ -28,8 +28,16 @@
 
   /* ---------- données ---------- */
   function defaults() {
-    return { profile: { name: '', height: '', age: '' }, weights: [], pains: [], sessions: [], tests: [], loads: {},
-      settings: { ack: false, rest: 60 }, videos: {} };
+    return { profile: { name: '', height: '', goal: '' }, weights: [], waist: [], pains: [], sessions: [],
+      settings: { ack: false, rest: 45, awake: true, sound: true }, videos: {} };
+  }
+  /* anciennes versions : le tour de taille était rangé dans la pesée */
+  function migrateWaist(d) {
+    if (!Array.isArray(d.waist)) d.waist = [];
+    (d.weights || []).forEach(function (w) {
+      if (w.waist && !d.waist.some(function (x) { return x.d === w.d; })) d.waist.push({ d: w.d, cm: w.waist });
+      delete w.waist;
+    });
   }
   function load() {
     var d = defaults();
@@ -37,8 +45,9 @@
       var j = JSON.parse(localStorage.getItem(KEY));
       if (j && typeof j === 'object') {
         Object.keys(d).forEach(function (k) { if (j[k] != null) d[k] = j[k]; });
-        d.settings = Object.assign({ ack: false, rest: 60 }, j.settings || {});
-        d.profile = Object.assign({ name: '', height: '', age: '' }, j.profile || {});
+        d.settings = Object.assign({ ack: false, rest: 45, awake: true, sound: true }, j.settings || {});
+        d.profile = Object.assign({ name: '', height: '', goal: '' }, j.profile || {});
+        migrateWaist(d);
       }
     } catch (e) { /* données illisibles : on repart de zéro */ }
     return d;
@@ -46,7 +55,7 @@
   var S = load();
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* stockage plein ou bloqué */ } }
 
-  var ui = { tab: 'home', track: 'force', grp: 'Tous' };
+  var ui = { tab: 'home', track: 'poids', grp: 'Tous' };
   var deferredInstall = null;
 
   /* ---------- doses ---------- */
@@ -120,9 +129,10 @@
   function todayPain() { return S.pains.filter(function (p) { return p.d === today(); })[0]; }
   function recommendation(p) {
     if (!p) return null;
-    if (p.gn >= 7) return { lvl: 'bad', text: 'Gêne ou douleur importante aujourd\'hui : pas de renforcement. Reposez-vous ou marchez doucement. Si cela dure, parlez-en à votre médecin.', session: null };
-    if (p.gn >= 4 || p.en <= 3) return { lvl: 'warn', text: 'Énergie basse ou gêne modérée : faites plutôt la séance douce, ou la séance express avec des charges plus légères.', session: 'douce' };
-    return { lvl: 'ok', text: 'Belle forme ! Une séance complète est possible aujourd\'hui.', session: nextSession() };
+    var m = Math.max(p.sci, p.knee);
+    if (m >= 7) return { lvl: 'bad', text: 'Douleur élevée aujourd\'hui : pas de séance. Marchez très doucement si c\'est confortable, changez souvent de position. Si cela dure plus de quelques jours, voyez votre médecin ou votre kiné.', session: null };
+    if (m >= 4) return { lvl: 'warn', text: 'Douleur modérée : faites plutôt la séance douce aujourd\'hui, et stoppez au moindre signe d\'aggravation.', session: 'douce' };
+    return { lvl: 'ok', text: 'Douleur faible : une séance complète est possible. Gardez la douleur à 3/10 maximum pendant l\'effort.', session: nextSession() };
   }
   function nextSession() {
     var order = ['A', 'B', 'C'];
@@ -147,7 +157,7 @@
     }).join('');
     var h = '<h1>Bonjour' + (S.profile.name ? ' ' + esc(S.profile.name) : '') + ' 👋</h1>';
     h += '<section class="card"><h2>Comment vous sentez-vous aujourd\'hui ?</h2>' +
-      slider('en', 'Énergie du jour', p ? p.en : 6) + slider('gn', 'Gêne ou douleur', p ? p.gn : 0) +
+      slider('sci', 'Douleur sciatique', p ? p.sci : 0) + slider('knee', 'Douleur au genou', p ? p.knee : 0) +
       '<button class="btn primary big" data-act="savepain" style="margin-top:12px">' + (p ? 'Mettre à jour' : 'Enregistrer') + '</button>';
     if (rec) {
       h += '<div class="banner ' + rec.lvl + '">' + esc(rec.text) + '</div>';
@@ -156,7 +166,7 @@
     h += '</section>';
     h += '<section class="card"><div class="row sb"><h2>Cette semaine</h2><span class="pill">' + wkSessions.length + ' / 3 séances</span></div>' +
       '<div class="dots">' + dots + '</div>' +
-      '<p class="muted">Objectif : 3 séances de renforcement par semaine, avec un jour de repos entre deux. Les autres jours : marche ou activité plaisir.</p></section>';
+      '<p class="muted">Objectif : 3 séances et de la marche les autres jours. Un jour de repos entre deux séances de renforcement.</p></section>';
     h += weightCard();
     if (deferredInstall) h += '<button class="btn big" data-act="install">📲 Installer l\'application sur le téléphone</button>';
     h += '<button class="btn big" data-act="safety" style="margin-top:10px">🛟 Règles de sécurité</button>';
@@ -167,15 +177,23 @@
       '<input class="rng" type="range" id="' + id + '" min="0" max="10" step="1" value="' + v + '">';
   }
   function sortedWeights() { return S.weights.slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; }); }
+  function sortedWaist() { return S.waist.slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; }); }
+  function fmtCm(v) { return (Math.round(v * 10) / 10).toString().replace('.', ',') + ' cm'; }
+  function signed(v) { var r = Math.round(v * 10) / 10; return (r > 0 ? '+' : '') + r.toString().replace('.', ','); }
   function weightCard() {
-    var w = sortedWeights();
-    if (!w.length) return '<section class="card"><h2>Poids</h2><p class="muted">Ajoutez votre poids dans l\'onglet Suivi. L\'objectif est qu\'il reste stable.</p></section>';
+    var w = sortedWeights(), wa = sortedWaist(), belly = '';
+    if (wa.length) {
+      var wl = wa[wa.length - 1], wd = wl.cm - wa[0].cm;
+      belly = '<div class="row sb" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><div><b>Tour de ventre : ' + fmtCm(wl.cm) + '</b><div class="muted">au ' + fmtDate(wl.d) + '</div></div>' +
+        (wa.length > 1 ? '<div style="text-align:right"><b>' + signed(wd) + ' cm</b><div class="muted">depuis le début</div></div>' : '') + '</div>';
+    }
+    if (!w.length) return '<section class="card"><h2>Poids</h2><p class="muted">Ajoutez votre poids dans l\'onglet Suivi pour voir votre progression.</p>' + belly + '</section>';
     var last = w[w.length - 1], first = w[0], diff = last.kg - first.kg;
+    var goal = num(S.profile.goal);
     var h = '<section class="card"><h2>Poids</h2><div class="row sb"><div><div class="big-num">' + fmtKg(last.kg) + '</div><div class="muted">au ' + fmtDate(last.d) + '</div></div>' +
       '<div style="text-align:right"><b>' + (diff > 0 ? '+' : '') + (Math.round(diff * 10) / 10).toString().replace('.', ',') + ' kg</b><div class="muted">depuis le début</div></div></div>';
-    if (diff <= -2) h += '<div class="banner warn">Votre poids a baissé de plus de 2 kg. Mangez un peu plus (protéines à chaque repas) et parlez-en à votre médecin si cette baisse n\'est pas voulue.</div>';
-    else h += '<p class="muted">Poids stable : c\'est l\'objectif.</p>';
-    return h + '</section>';
+    if (goal) h += '<p class="muted">Objectif : ' + fmtKg(goal) + ' (reste ' + fmtKg(Math.max(0, last.kg - goal)) + ')</p>';
+    return h + belly + '</section>';
   }
 
   function viewSessions() {
@@ -185,8 +203,8 @@
         '<p class="muted">' + esc(s.desc) + '</p><p class="muted">' + s.items.length + ' exercices · environ ' + estMinutes(s.items) + ' min</p>' +
         '<button class="btn primary" data-act="preview" data-id="' + s.id + '">Voir et démarrer</button></section>';
     });
-    h += '<section class="card"><h2>Semaine type</h2><ul class="t"><li>Lundi : séance A</li><li>Mardi : marche (20 à 30 min)</li><li>Mercredi : séance B</li><li>Jeudi : repos ou activité plaisir</li><li>Vendredi : séance C</li><li>Week-end : marche, vélo, jardin, danse…</li></ul>' +
-      '<p class="muted">Jours chargés : séance express. Jours de fatigue : séance douce.</p></section>';
+    h += '<section class="card"><h2>Semaine type</h2><ul class="t"><li>Lundi : séance A</li><li>Mardi : marche (20 à 30 min)</li><li>Mercredi : séance B</li><li>Jeudi : vélo ou piscine, ou marche</li><li>Vendredi : séance A</li><li>Samedi : séance C</li><li>Dimanche : repos</li></ul>' +
+      '<p class="muted">Les jours de douleur, remplacez par la séance douce.</p></section>';
     return h;
   }
 
@@ -201,59 +219,53 @@
     }).join('') + '</div>';
   }
 
-  function testSeries(id) {
-    return S.tests.filter(function (t) { return t.id === id; }).sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
-  }
   function viewTrack() {
-    var tabs = [['force', 'Force'], ['poids', 'Poids & mesures'], ['ress', 'Ressenti'], ['histo', 'Séances']];
+    var tabs = [['poids', 'Poids'], ['ventre', 'Ventre'], ['douleur', 'Douleurs'], ['histo', 'Séances']];
     var h = '<h1>Suivi</h1><div class="seg">' + tabs.map(function (t) {
       return '<button class="' + (ui.track === t[0] ? 'on' : '') + '" data-act="track" data-t="' + t[0] + '">' + t[1] + '</button>';
     }).join('') + '</div>';
-    if (ui.track === 'force') {
-      h += '<p class="muted">Refaites ces tests toutes les 4 à 6 semaines, dans les mêmes conditions. Le muscle se voit dans les chiffres bien avant la balance.</p>';
-      D.tests.forEach(function (t) {
-        var ser = testSeries(t.id), last = ser[ser.length - 1], first = ser[0];
-        h += '<section class="card"><h2>' + esc(t.name) + '</h2>';
-        if (last) {
-          var diff = last.v - first.v;
-          h += '<div class="row sb"><div><span class="big-num">' + last.v + '</span> <span class="muted">' + t.unit + '</span><div class="muted">au ' + fmtDate(last.d) + '</div></div>' +
-            (ser.length > 1 ? '<div style="text-align:right"><b>' + (diff > 0 ? '+' : '') + diff + ' ' + t.unit + '</b><div class="muted">depuis le début</div></div>' : '') + '</div>';
-          if (ser.length > 1) h += chart([{ name: t.name, color: '#9d3b6b', pts: ser.map(function (x) { return { x: x.d, y: x.v }; }) }], { label: 'Évolution : ' + t.name });
-        } else h += '<p class="muted">Pas encore de mesure.</p>';
-        h += '<details><summary>Comment faire le test</summary><p>' + esc(t.how) + '</p></details>' +
-          '<div class="row" style="margin-top:8px"><div class="grow"><input id="tv_' + t.id + '" type="text" inputmode="decimal" placeholder="Résultat (' + t.unit + ')" aria-label="Résultat ' + esc(t.name) + '"></div>' +
-          '<button class="btn primary" data-act="addtest" data-id="' + t.id + '">Ajouter</button></div></section>';
-      });
-    } else if (ui.track === 'poids') {
+    if (ui.track === 'poids') {
       var w = sortedWeights();
-      h += '<section class="card"><h2>Ajouter une mesure</h2><label for="wkg">Poids (kg)</label><input id="wkg" type="text" inputmode="decimal" placeholder="ex. 62,5">' +
-        '<div class="row"><div class="grow"><label for="wwaist">Taille (cm)</label><input id="wwaist" type="text" inputmode="decimal" placeholder="facultatif"></div>' +
-        '<div class="grow"><label for="wthigh">Cuisse (cm)</label><input id="wthigh" type="text" inputmode="decimal" placeholder="facultatif"></div>' +
-        '<div class="grow"><label for="warm">Bras (cm)</label><input id="warm" type="text" inputmode="decimal" placeholder="facultatif"></div></div>' +
+      h += '<section class="card"><h2>Ajouter une pesée</h2><label for="wkg">Poids (kg)</label><input id="wkg" type="text" inputmode="decimal" placeholder="ex. 84,5">' +
         '<button class="btn primary big" data-act="addweight" style="margin-top:12px">Enregistrer</button></section>';
-      h += '<section class="card"><h2>Poids</h2>' + chart([{ name: 'Poids', color: '#9d3b6b', pts: w.map(function (x) { return { x: x.d, y: x.kg }; }) }], { dec: 1, label: 'Évolution du poids' }) +
-        '<p class="muted">Objectif : un poids stable. Les tours de cuisse et de bras peuvent augmenter légèrement quand le muscle se développe.</p></section>';
+      h += '<section class="card"><h2>Évolution</h2>' + chart([{ name: 'Poids', color: '#0f766e', pts: w.map(function (x) { return { x: x.d, y: x.kg }; }) }], { dec: 1, label: 'Évolution du poids' });
+      var hgt = num(S.profile.height);
+      if (w.length && hgt && hgt > 100) {
+        var imc = w[w.length - 1].kg / Math.pow(hgt / 100, 2);
+        h += '<p class="muted">IMC actuel : ' + (Math.round(imc * 10) / 10).toString().replace('.', ',') + '</p>';
+      }
+      h += '</section>';
       h += '<section class="card"><h2>Historique</h2>' + (w.length ? '<ul class="list">' + w.slice().reverse().slice(0, 30).map(function (x) {
-        var extra = [x.waist ? 'taille ' + x.waist : '', x.thigh ? 'cuisse ' + x.thigh : '', x.arm ? 'bras ' + x.arm : ''].filter(Boolean).join(' · ');
-        return '<li><div class="grow"><b>' + fmtKg(x.kg) + '</b>' + (extra ? ' · ' + extra + ' cm' : '') + '<div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delweight" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
+        return '<li><div class="grow"><b>' + fmtKg(x.kg) + '</b>' + '<div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delweight" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
+      }).join('') + '</ul>' : '<p class="muted">Aucune pesée.</p>') + '</section>';
+    } else if (ui.track === 'ventre') {
+      var wa = sortedWaist();
+      h += '<section class="card"><h2>Ajouter une mesure</h2><label for="wcm">Tour de ventre (cm)</label><input id="wcm" type="text" inputmode="decimal" placeholder="ex. 98,5">' +
+        '<button class="btn primary big" data-act="addwaist" style="margin-top:12px">Enregistrer</button>' +
+        '<details><summary>Comment bien mesurer</summary><p>Debout, ventre relâché, mètre de couturière à plat au niveau du nombril (sans serrer ni creuser le ventre). Mesurez après une expiration normale, de préférence le matin, et toujours de la même façon.</p></details></section>';
+      h += '<section class="card"><h2>Évolution</h2>' + chart([{ name: 'Tour de ventre', color: '#b45309', pts: wa.map(function (x) { return { x: x.d, y: x.cm }; }) }], { dec: 1, label: 'Évolution du tour de ventre' });
+      if (wa.length > 1) {
+        var wl2 = wa[wa.length - 1], wp = wa[wa.length - 2];
+        h += '<div class="row sb" style="margin-top:8px"><div><b>' + signed(wl2.cm - wp.cm) + ' cm</b><div class="muted">depuis la mesure précédente</div></div>' +
+          '<div style="text-align:right"><b>' + signed(wl2.cm - wa[0].cm) + ' cm</b><div class="muted">depuis le début</div></div></div>';
+      }
+      h += '<p class="muted">Mesurez une fois par semaine, pas tous les jours : les variations d\'un jour à l\'autre sont normales. Une baisse régulière sur plusieurs semaines est un bon signe, même quand la balance bouge peu.</p></section>';
+      h += '<section class="card"><h2>Historique</h2>' + (wa.length ? '<ul class="list">' + wa.slice().reverse().slice(0, 30).map(function (x) {
+        return '<li><div class="grow"><b>' + fmtCm(x.cm) + '</b><div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delwaist" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
       }).join('') + '</ul>' : '<p class="muted">Aucune mesure.</p>') + '</section>';
-    } else if (ui.track === 'ress') {
+    } else if (ui.track === 'douleur') {
       var p = S.pains.slice().sort(function (a, b) { return a.d < b.d ? -1 : 1; }).slice(-30);
-      h += '<section class="card"><h2>Énergie et gêne (0 à 10)</h2>' + chart([
-        { name: 'Énergie', color: '#15803d', pts: p.map(function (x) { return { x: x.d, y: x.en }; }) },
-        { name: 'Gêne ou douleur', color: '#d97706', pts: p.map(function (x) { return { x: x.d, y: x.gn }; }) }
-      ], { min: 0, max: 10, label: 'Évolution du ressenti' }) +
-        '<p class="muted">Enregistrez votre ressenti depuis l\'accueil. Une énergie qui monte au fil des semaines est un très bon signe.</p></section>';
+      h += '<section class="card"><h2>Douleurs (0 à 10)</h2>' + chart([
+        { name: 'Sciatique', color: '#d97706', pts: p.map(function (x) { return { x: x.d, y: x.sci }; }) },
+        { name: 'Genou', color: '#2563eb', pts: p.map(function (x) { return { x: x.d, y: x.knee }; }) }
+      ], { min: 0, max: 10, label: 'Évolution des douleurs' }) +
+        '<p class="muted">Enregistrez votre douleur chaque jour depuis l\'accueil. Montrez ce graphique à votre médecin ou kiné.</p></section>';
     } else {
       var tot = S.sessions.length, mins = S.sessions.reduce(function (a, s) { return a + (s.mins || 0); }, 0);
       h += '<section class="card"><div class="row"><div class="grow"><div class="big-num">' + tot + '</div><div class="muted">séances</div></div><div class="grow"><div class="big-num">' + mins + '</div><div class="muted">minutes</div></div></div></section>';
       h += '<section class="card"><h2>Séances faites</h2>' + (tot ? '<ul class="list">' + S.sessions.slice().reverse().slice(0, 40).map(function (s) {
-        return '<li><div class="grow"><b>' + esc(s.name) + '</b><div class="muted">' + fmtDate(s.d) + ' · ' + s.mins + ' min' + (s.en != null ? ' · après : énergie ' + s.en + ', gêne ' + s.gn : '') + '</div></div></li>';
+        return '<li><div class="grow"><b>' + esc(s.name) + '</b><div class="muted">' + fmtDate(s.d) + ' · ' + s.mins + ' min' + (s.sci != null ? ' · douleur après : dos ' + s.sci + ', genou ' + s.knee : '') + '</div></div></li>';
       }).join('') + '</ul>' : '<p class="muted">Aucune séance pour l\'instant.</p>') + '</section>';
-      var ld = Object.keys(S.loads).filter(function (k) { return EX[k] && S.loads[k]; });
-      if (ld.length) h += '<section class="card"><h2>Mes charges actuelles</h2><ul class="list">' + ld.map(function (k) {
-        return '<li><div class="grow">' + esc(EX[k].name) + '</div><b>' + String(S.loads[k]).replace('.', ',') + ' kg</b></li>';
-      }).join('') + '</ul></section>';
     }
     return h;
   }
@@ -262,18 +274,22 @@
     var p = S.profile;
     return '<h1>Profil</h1><section class="card"><label for="pname">Prénom</label><input id="pname" type="text" value="' + esc(p.name) + '">' +
       '<label for="pheight">Taille (cm)</label><input id="pheight" type="text" inputmode="decimal" value="' + esc(p.height) + '">' +
-      '<label for="page">Âge</label><input id="page" type="text" inputmode="numeric" value="' + esc(p.age) + '">' +
-      '<label for="prest">Temps de repos entre séries</label><select id="prest">' + [45, 60, 90, 120].map(function (v) {
+      '<label for="pgoal">Poids objectif (kg)</label><input id="pgoal" type="text" inputmode="decimal" step="0.1" value="' + esc(p.goal) + '">' +
+      '<label for="prest">Temps de repos entre séries</label><select id="prest">' + [30, 45, 60, 90].map(function (v) {
         return '<option value="' + v + '"' + (S.settings.rest === v ? ' selected' : '') + '>' + v + ' secondes</option>';
       }).join('') + '</select>' +
       '<button class="btn primary big" data-act="saveprofile" style="margin-top:12px">Enregistrer</button></section>' +
+      '<section class="card"><h2>Écran et son</h2>' +
+      '<label class="chk"><input type="checkbox" id="sawake"' + (S.settings.awake !== false ? ' checked' : '') + '> Garder l\'écran allumé quand l\'application est ouverte</label>' +
+      '<label class="chk"><input type="checkbox" id="ssound"' + (S.settings.sound !== false ? ' checked' : '') + '> Bip à la fin du chrono et au changement de côté</label>' +
+      '<button class="btn big" data-act="testsound">🔊 Tester le son</button><p class="muted">Si vous n\'entendez rien, montez le volume multimédia du téléphone.</p></section>' +
       '<section class="card"><h2>Sauvegarde</h2><p class="muted">Vos données restent sur ce téléphone. Exportez-les de temps en temps.</p>' +
       '<div class="row"><button class="btn grow" data-act="export">⬇ Exporter</button><button class="btn grow" data-act="import">⬆ Importer</button></div>' +
       '<input type="file" id="file" accept="application/json,.json" hidden></section>' +
       '<section class="card"><button class="btn big" data-act="safety">🛟 Règles de sécurité</button>' +
       (deferredInstall ? '<button class="btn big" data-act="install" style="margin-top:10px">📲 Installer l\'application</button>' : '') +
       '<button class="btn big danger" data-act="reset" style="margin-top:10px">Effacer toutes mes données</button></section>' +
-      '<p class="muted" style="text-align:center">Vitalité 50+ · ne remplace pas un avis médical</p>';
+      '<p class="muted" style="text-align:center">FitSanté v3 · ne remplace pas un avis médical</p>';
   }
 
   /* ---------- rendu principal ---------- */
@@ -303,7 +319,6 @@
     if (ex.tips && ex.tips.length) h += '<div class="banner ok">💡 ' + esc(ex.tips.join(' ')) + '</div>';
     h += '<div class="banner bad">⚠️ <b>Arrêtez si :</b> ' + esc(ex.stop) + '</div>';
     h += '<details><summary>Version plus facile</summary><p>' + esc(ex.easier) + '</p></details>';
-    if (ex.harder) h += '<details><summary>Pour progresser</summary><p>' + esc(ex.harder) + '</p></details>';
     h += '<a class="btn big" target="_blank" rel="noopener" href="' + esc(ytUrl(ex)) + '">▶ Voir des vidéos de cet exercice</a>';
     if (mine) h += '<a class="btn big" style="margin-top:8px" target="_blank" rel="noopener" href="' + esc(mine) + '">🎬 Ma vidéo (kiné)</a>';
     h += '<details><summary>Ajouter ma propre vidéo</summary><label for="vurl">Lien (https://…)</label><input id="vurl" type="url" value="' + esc(mine) + '" placeholder="https://…">' +
@@ -319,7 +334,7 @@
         var ex = EX[it.id];
         return '<li><button class="chip" data-act="exo" data-id="' + ex.id + '" style="border:0;background:none;padding:0;text-align:left;flex:1"><b>' + ex.icon + ' ' + esc(ex.name) + '</b><div class="muted">' + esc(doseLabel(doseOf(ex, it))) + '</div></button></li>';
       }).join('') + '</ul>' +
-      '<div class="banner warn">Échauffez-vous, choisissez des charges qui rendent les deux dernières répétitions difficiles, soufflez à l\'effort, et arrêtez en cas de douleur vive.</div>' +
+      '<div class="banner warn">Échauffez-vous, restez à 3/10 de douleur maximum et arrêtez si la douleur descend dans la jambe.</div>' +
       '<button class="btn primary big" data-act="start" data-id="' + id + '">▶ Démarrer la séance</button>';
     openSheet(h);
   }
@@ -331,46 +346,96 @@
       '<h3>Les règles d\'or</h3><ul class="t">' + sf.rules.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>' +
       '<h3>À éviter</h3><ul class="t">' + sf.avoid.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>' +
       '<h3>Consulter sans attendre</h3><div class="banner bad">' + sf.urgent.map(function (r) { return '<p>' + esc(r) + '</p>'; }).join('') + '</div>' +
-      '<h3>Alimentation et poids</h3><p>' + esc(sf.food) + '</p>';
+      '<h3>Perte de poids</h3><p>' + esc(sf.weight) + '</p>';
     if (first) {
       h += '<h3>Votre profil (modifiable plus tard)</h3><label for="onname">Prénom</label><input id="onname" type="text">' +
         '<div class="row"><div class="grow"><label for="onh">Taille (cm)</label><input id="onh" type="text" inputmode="decimal"></div>' +
         '<div class="grow"><label for="onw">Poids (kg)</label><input id="onw" type="text" inputmode="decimal" step="0.1"></div></div>' +
-        '<label for="ong">Âge</label><input id="ong" type="text" inputmode="decimal" step="0.1">' +
+        '<label for="onv">Tour de ventre (cm), facultatif</label><input id="onv" type="text" inputmode="decimal">' +
+        '<label for="ong">Poids objectif (kg)</label><input id="ong" type="text" inputmode="decimal" step="0.1">' +
         '<button class="btn primary big" style="margin-top:16px" data-act="ack">J\'ai compris, commencer</button>';
     } else h += '<button class="btn big" data-act="close" style="margin-top:12px">Fermer</button>';
     openSheet(h, first);
   }
 
   /* ---------- lecteur de séance ---------- */
-  var P = null, tick = null, wake = null;
+  var P = null, tick = null, wake = null, waking = false, audioCtx = null;
+
+  /* --- écran allumé (Wake Lock) : repris à chaque retour sur l'appli --- */
+  function requestWake() {
+    if (S.settings.awake === false || wake || waking) return;
+    try {
+      if (navigator.wakeLock && document.visibilityState === 'visible') {
+        waking = true;
+        navigator.wakeLock.request('screen').then(function (w) {
+          waking = false; wake = w;
+          w.addEventListener('release', function () { if (wake === w) wake = null; });
+        }).catch(function () { waking = false; });
+      }
+    } catch (e) { waking = false; }
+  }
+  function releaseWake() {
+    try { if (wake) { var w = wake; wake = null; w.release(); } } catch (e) { /* ignoré */ }
+  }
+
+  /* --- sons et vibrations --- */
+  function unlockAudio() {
+    try {
+      if (!audioCtx) { var AC = window.AudioContext || window.webkitAudioContext; if (AC) audioCtx = new AC(); }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { /* ignoré */ }
+  }
+  function beep(freq, dur, when, vol) {
+    if (!audioCtx || S.settings.sound === false) return;
+    try {
+      var t0 = audioCtx.currentTime + (when || 0), o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.6, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(audioCtx.destination); o.start(t0); o.stop(t0 + dur + 0.05);
+    } catch (e) { /* ignoré */ }
+  }
+  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* ignoré */ } }
+  function countSignal() { beep(880, 0.12); }
+  function sideSignal() { beep(660, 0.2, 0); beep(990, 0.2, 0.3); beep(660, 0.2, 0.6); buzz([200, 100, 200, 100, 200]); }
+  function endSignal() { beep(880, 0.2, 0); beep(880, 0.2, 0.3); beep(1175, 0.6, 0.6); buzz([400, 150, 400]); }
+
+  /* --- chrono basé sur l'heure réelle : reste exact même si le téléphone ralentit l'appli --- */
   function stopTick() { if (tick) { clearInterval(tick); tick = null; } }
-  function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { /* ignoré */ } }
+  function remaining() { return Math.max(0, Math.ceil((P.end - Date.now()) / 1000)); }
+  function showTime() { var el = $('#ptime'); if (el) el.textContent = mmss(P.t); }
+  function step() {
+    if (!P || !tick) return;
+    var rem = remaining();
+    P.t = rem;
+    if (rem <= 0) {
+      stopTick(); endSignal();
+      if (P.mode === 'timer') finishSet(); else { P.mode = 'ready'; renderPlayer(); }
+      return;
+    }
+    var sideNow = false;
+    if (P.mode === 'timer' && P.side && !P.sideDone && rem <= P.total / 2) {
+      P.sideDone = true; sideNow = true; sideSignal();
+      var sd = $('#pside'); if (sd) sd.textContent = '🔁 Changez de côté !';
+    }
+    if (!sideNow && rem <= 3 && P.lastBeep !== rem) { P.lastBeep = rem; countSignal(); }
+    showTime();
+  }
   function startTick() {
     stopTick();
-    tick = setInterval(function () {
-      if (!P) { stopTick(); return; }
-      P.t -= 1;
-      var half = P.mode === 'timer' && P.side && P.t === Math.floor(P.total / 2);
-      if (half) { buzz([200, 100, 200]); var s = $('#pside'); if (s) s.textContent = '🔁 Changez de côté !'; }
-      if (P.t <= 0) {
-        stopTick(); buzz(400);
-        if (P.mode === 'timer') finishSet(); else { P.mode = 'ready'; renderPlayer(); }
-        return;
-      }
-      var el = $('#ptime'); if (el) el.textContent = mmss(P.t);
-    }, 1000);
+    P.end = Date.now() + P.t * 1000; P.lastBeep = null;
+    tick = setInterval(step, 250);
   }
   function startSession(id) {
     var s = sessionObj(id);
     P = { sid: id, name: s.name, items: s.items.map(function (it) { return { ex: EX[it.id], dose: doseOf(EX[it.id], it) }; }),
-      i: 0, set: 1, mode: 'ready', t: 0, total: 0, side: false, started: Date.now(), done: [] };
-    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { wake = w; }).catch(function () { }); } catch (e) { /* ignoré */ }
+      i: 0, set: 1, mode: 'ready', t: 0, total: 0, side: false, sideDone: false, end: 0, lastBeep: null, started: Date.now(), done: [] };
+    requestWake();
     renderPlayer();
   }
   function endPlayer() {
     stopTick(); P = null;
-    try { if (wake) { wake.release(); wake = null; } } catch (e) { /* ignoré */ }
     closeSheet(); render();
   }
   function finishSet() {
@@ -385,12 +450,6 @@
     }
     renderPlayer();
   }
-  function saveLoad() {
-    var el = $('#pload');
-    if (!el || !P) return;
-    var v = num(el.value);
-    if (v != null && v >= 0 && v <= 100) { S.loads[P.items[P.i].ex.id] = v; save(); }
-  }
   function nextEx() {
     stopTick(); P.i += 1; P.set = 1; P.mode = P.i >= P.items.length ? 'done' : 'ready'; renderPlayer();
   }
@@ -399,9 +458,9 @@
     var n = P.items.length;
     if (P.mode === 'done') {
       var mins = Math.max(1, Math.round((Date.now() - P.started) / 60000));
-      var tp = todayPain() || { en: 6, gn: 0 };
+      var tp = todayPain() || { sci: 0, knee: 0 };
       openSheet('<h2>🎉 Séance terminée !</h2><p>' + P.done.length + ' exercice(s) faits en ' + mins + ' min. Bravo, la régularité est ce qui compte.</p>' +
-        '<div class="card">' + slider('en', 'Énergie maintenant', tp.en) + slider('gn', 'Gêne ou douleur maintenant', tp.gn) + '</div>' +
+        '<div class="card">' + slider('sci', 'Douleur sciatique maintenant', tp.sci) + slider('knee', 'Douleur au genou maintenant', tp.knee) + '</div>' +
         '<button class="btn primary big" data-act="finish">Enregistrer la séance</button>', true);
       return;
     }
@@ -416,15 +475,10 @@
     } else {
       h += '<h2>' + ex.icon + ' ' + esc(ex.name) + '</h2>' + figBox(ex) +
         '<p style="text-align:center"><b>' + esc(doseLabel(d)) + '</b>' + (d.type !== 'cardio' ? ' · série ' + P.set + '/' + d.sets : '') + '</p>';
-      if (ex.loaded) {
-        var lk = S.loads[ex.id];
-        h += '<div class="card" style="padding:10px"><label for="pload" style="margin:0 0 4px">Charge utilisée (kg)</label><input id="pload" type="text" inputmode="decimal" value="' + (lk != null ? esc(String(lk).replace('.', ',')) : '') + '" placeholder="ex. 3">' +
-          '<div class="muted" style="margin-top:4px">' + (lk != null ? 'Dernière fois : ' + String(lk).replace('.', ',') + ' kg. Si les dernières répétitions étaient faciles, ajoutez 0,5 à 1 kg.' : 'Choisissez une charge qui rend les deux dernières répétitions difficiles.') + '</div></div>';
-      }
       if (d.type === 'reps') {
         h += '<button class="btn primary big" data-act="setdone">✔ Série terminée</button>';
       } else if (P.mode === 'timer') {
-        h += '<div class="timer" id="ptime">' + mmss(P.t) + '</div>' + (P.side ? '<p class="muted" id="pside" style="text-align:center">Premier côté, puis le chrono vous prévient.</p>' : '') +
+        h += '<div class="timer" id="ptime">' + mmss(P.t) + '</div>' + (P.side ? '<p class="muted" id="pside" style="text-align:center">' + (P.sideDone ? '🔁 Changez de côté !' : 'Premier côté, puis un bip vous prévient.') + '</p>' : '') +
           '<div class="row"><button class="btn grow" data-act="tstop">Arrêter</button><button class="btn primary grow" data-act="setdone">✔ Terminé</button></div>';
       } else {
         var lab = d.type === 'time' ? (d.perSide ? d.secs + ' s de chaque côté' : d.secs + ' s') : d.mins + ' min';
@@ -432,7 +486,7 @@
           '<button class="btn big" data-act="setdone" style="margin-top:8px">✔ Déjà fait</button>';
       }
       h += '<details><summary>Comment faire</summary><ol>' + ex.steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol></details>' +
-        '<details><summary>Trop dur ? Trop facile ?</summary><p><b>Plus facile :</b> ' + esc(ex.easier) + '</p>' + (ex.harder ? '<p><b>Plus difficile :</b> ' + esc(ex.harder) + '</p>' : '') + '<p><b>Arrêtez si :</b> ' + esc(ex.stop) + '</p></details>' +
+        '<details><summary>Ça fait mal ? Version plus facile</summary><p>' + esc(ex.easier) + '</p><p><b>Arrêtez si :</b> ' + esc(ex.stop) + '</p></details>' +
         '<div class="row" style="margin-top:8px"><a class="btn grow" target="_blank" rel="noopener" href="' + esc(ytUrl(ex)) + '">▶ Vidéo</a><button class="btn grow" data-act="skip">Passer l\'exercice</button></div>';
     }
     openSheet(h, true);
@@ -449,28 +503,32 @@
     safety: function () { safetySheet(false); },
     start: function (el) { startSession(el.dataset.id); },
     savepain: function () {
-      var en = +$('#view #en').value, gn = +$('#view #gn').value, t = today();
+      var sci = +$('#view #sci').value, knee = +$('#view #knee').value, t = today();
       S.pains = S.pains.filter(function (p) { return p.d !== t; });
-      S.pains.push({ d: t, en: en, gn: gn }); save(); render();
+      S.pains.push({ d: t, sci: sci, knee: knee }); save(); render();
     },
     addweight: function () {
       var kg = num($('#wkg').value);
       if (!kg || kg < 30 || kg > 300) { alert('Entrez un poids valide (en kg).'); return; }
       var t = today();
       S.weights = S.weights.filter(function (w) { return w.d !== t; });
-      S.weights.push({ d: t, kg: kg, waist: num($('#wwaist').value) || null, thigh: num($('#wthigh').value) || null, arm: num($('#warm').value) || null }); save(); render();
+      S.weights.push({ d: t, kg: kg }); save(); render();
     },
-    addtest: function (el) {
-      var id = el.dataset.id, v = num($('#tv_' + id).value), t = today();
-      if (v == null || v < 0 || v > 1000) { alert('Entrez un résultat valide.'); return; }
-      S.tests = S.tests.filter(function (x) { return !(x.id === id && x.d === t); });
-      S.tests.push({ d: t, id: id, v: v }); save(); render();
+    addwaist: function () {
+      var cm = num($('#wcm').value);
+      if (!cm || cm < 40 || cm > 250) { alert('Entrez un tour de ventre valide (en cm).'); return; }
+      var t = today();
+      S.waist = S.waist.filter(function (x) { return x.d !== t; });
+      S.waist.push({ d: t, cm: cm }); save(); render();
+    },
+    delwaist: function (el) {
+      if (confirm('Supprimer cette mesure ?')) { S.waist = S.waist.filter(function (x) { return x.d !== el.dataset.d; }); save(); render(); }
     },
     delweight: function (el) {
       if (confirm('Supprimer cette pesée ?')) { S.weights = S.weights.filter(function (w) { return w.d !== el.dataset.d; }); save(); render(); }
     },
     saveprofile: function () {
-      S.profile.name = $('#pname').value.trim(); S.profile.height = $('#pheight').value; S.profile.age = $('#page').value;
+      S.profile.name = $('#pname').value.trim(); S.profile.height = $('#pheight').value; S.profile.goal = $('#pgoal').value;
       S.settings.rest = +$('#prest').value; save(); render(); alert('Profil enregistré ✔');
     },
     savevideo: function (el) {
@@ -481,51 +539,55 @@
     },
     ack: function () {
       var w = num($('#onw').value), t = today();
-      S.profile.name = $('#onname').value.trim(); S.profile.height = $('#onh').value; S.profile.age = $('#ong').value;
-      if (w && w >= 30 && w <= 300) S.weights.push({ d: t, kg: w, waist: null });
+      S.profile.name = $('#onname').value.trim(); S.profile.height = $('#onh').value; S.profile.goal = $('#ong').value;
+      if (w && w >= 30 && w <= 300) S.weights.push({ d: t, kg: w });
+      var v = num($('#onv').value);
+      if (v && v >= 40 && v <= 250) S.waist.push({ d: t, cm: v });
       S.settings.ack = true; save(); closeSheet(); render();
     },
     export: function () {
       var blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
-      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vitalite-sauvegarde-' + today() + '.json';
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fitsante-sauvegarde-' + today() + '.json';
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
     },
     import: function () { $('#file').click(); },
     reset: function () {
-      if (confirm('Effacer toutes vos données (poids, ressenti, tests, séances) ? Action irréversible.')) {
+      if (confirm('Effacer toutes vos données (poids, douleurs, séances) ? Action irréversible.')) {
         try { localStorage.removeItem(KEY); } catch (e) { /* ignoré */ }
         S = defaults(); safetyFirst(); render();
       }
     },
+    testsound: function () { unlockAudio(); sideSignal(); setTimeout(endSignal, 1100); },
     install: function () {
       if (!deferredInstall) return;
       deferredInstall.prompt();
       deferredInstall.userChoice.then(function () { deferredInstall = null; render(); });
     },
     /* lecteur */
-    setdone: function () { saveLoad(); stopTick(); finishSet(); },
+    setdone: function () { stopTick(); finishSet(); },
     tstart: function () {
       var d = P.items[P.i].dose;
       P.side = d.type === 'time' && !!d.perSide;
       P.total = d.type === 'time' ? d.secs * (d.perSide ? 2 : 1) : d.mins * 60;
-      P.t = P.total; P.mode = 'timer'; startTick(); renderPlayer();
+      P.t = P.total; P.mode = 'timer'; P.sideDone = false; startTick(); renderPlayer();
     },
     tstop: function () { stopTick(); P.mode = 'ready'; renderPlayer(); },
-    restplus: function () { P.t += 15; var el = $('#ptime'); if (el) el.textContent = mmss(P.t); },
+    restplus: function () { P.end += 15000; P.t = remaining(); showTime(); },
     restskip: function () { stopTick(); P.mode = 'ready'; renderPlayer(); },
-    skip: function () { if (confirm('Passer cet exercice ?')) { saveLoad(); nextEx(); } },
+    skip: function () { if (confirm('Passer cet exercice ?')) nextEx(); },
     quit: function () {
       if (confirm('Quitter la séance ? Votre progression ne sera pas enregistrée.')) endPlayer();
     },
     finish: function () {
-      var en = +$('#overlay #en').value, gn = +$('#overlay #gn').value, t = today();
-      S.sessions.push({ d: t, id: P.sid, name: P.name, mins: Math.max(1, Math.round((Date.now() - P.started) / 60000)), n: P.done.length, en: en, gn: gn });
-      if (!todayPain()) S.pains.push({ d: t, en: en, gn: gn });
+      var sci = +$('#overlay #sci').value, knee = +$('#overlay #knee').value, t = today();
+      S.sessions.push({ d: t, id: P.sid, name: P.name, mins: Math.max(1, Math.round((Date.now() - P.started) / 60000)), n: P.done.length, sci: sci, knee: knee });
+      if (!todayPain()) S.pains.push({ d: t, sci: sci, knee: knee });
       save(); endPlayer();
     }
   };
 
   document.addEventListener('click', function (e) {
+    unlockAudio();
     var el = e.target.closest('[data-act]');
     if (el && actions[el.dataset.act]) { e.preventDefault(); actions[el.dataset.act](el); return; }
     if (e.target.id === 'overlay' && !(P || !S.settings.ack)) closeSheet();
@@ -536,6 +598,8 @@
     }
   });
   document.addEventListener('change', function (e) {
+    if (e.target.id === 'sawake') { S.settings.awake = e.target.checked; save(); if (e.target.checked) requestWake(); else releaseWake(); return; }
+    if (e.target.id === 'ssound') { S.settings.sound = e.target.checked; save(); if (e.target.checked) { unlockAudio(); beep(880, 0.15); } return; }
     if (e.target.id !== 'file' || !e.target.files[0]) return;
     var fr = new FileReader();
     fr.onload = function () {
@@ -543,17 +607,25 @@
         var j = JSON.parse(fr.result);
         if (!j || !Array.isArray(j.weights) || !Array.isArray(j.sessions)) throw new Error('format');
         if (!confirm('Remplacer vos données actuelles par cette sauvegarde ?')) return;
-        S = Object.assign(defaults(), j); save(); render(); alert('Sauvegarde importée ✔');
+        S = Object.assign(defaults(), j); migrateWaist(S); save(); render(); alert('Sauvegarde importée ✔');
       } catch (err) { alert('Fichier non valide.'); }
     };
     fr.readAsText(e.target.files[0]);
   });
   window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredInstall = e; if (!P) render(); });
 
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+      wake = null; waking = false; requestWake();
+      if (P && tick) step();
+    }
+  });
+
   function safetyFirst() { if (!S.settings.ack) safetySheet(true); }
 
   render();
   safetyFirst();
+  requestWake();
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () { navigator.serviceWorker.register('./sw.js').catch(function () { }); });
   }
