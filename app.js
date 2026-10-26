@@ -3,7 +3,7 @@
   var D = window.DATA, Fig = window.Fig;
   var EX = {};
   D.exos.forEach(function (e) { EX[e.id] = e; });
-  var KEY = 'fitsante.v1';
+  var KEY = 'vitalite.v1';
 
   /* ---------- utilitaires ---------- */
   function $(s, r) { return (r || document).querySelector(s); }
@@ -27,17 +27,11 @@
   function mmss(t) { t = Math.max(0, Math.round(t)); return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); }
 
   /* ---------- données ---------- */
+  function defaultHave() { return (D.equipment || []).filter(function (e) { return e.def; }).map(function (e) { return e.id; }); }
   function defaults() {
-    return { profile: { name: '', height: '', goal: '' }, weights: [], waist: [], pains: [], sessions: [], activities: [],
-      settings: { ack: false, rest: 45, awake: true, sound: true }, videos: {} };
-  }
-  /* anciennes versions : le tour de taille était rangé dans la pesée */
-  function migrateWaist(d) {
-    if (!Array.isArray(d.waist)) d.waist = [];
-    (d.weights || []).forEach(function (w) {
-      if (w.waist && !d.waist.some(function (x) { return x.d === w.d; })) d.waist.push({ d: w.d, cm: w.waist });
-      delete w.waist;
-    });
+    return { profile: { name: '', height: '', age: '' }, weights: [], pains: [], sessions: [], activities: [], tests: [], loads: {},
+      equip: { have: defaultHave(), custom: [], weights: '' }, variant: {},
+      settings: { ack: false, rest: 60, awake: true, sound: true }, videos: {} };
   }
   function load() {
     var d = defaults();
@@ -45,18 +39,22 @@
       var j = JSON.parse(localStorage.getItem(KEY));
       if (j && typeof j === 'object') {
         Object.keys(d).forEach(function (k) { if (j[k] != null) d[k] = j[k]; });
-        d.settings = Object.assign({ ack: false, rest: 45, awake: true, sound: true }, j.settings || {});
-        d.profile = Object.assign({ name: '', height: '', goal: '' }, j.profile || {});
-        migrateWaist(d);
+        d.settings = Object.assign({ ack: false, rest: 60, awake: true, sound: true }, j.settings || {});
+        d.profile = Object.assign({ name: '', height: '', age: '' }, j.profile || {});
       }
     } catch (e) { /* données illisibles : on repart de zéro */ }
     if (!Array.isArray(d.activities)) d.activities = [];
+    if (!d.equip || typeof d.equip !== 'object') d.equip = { have: defaultHave(), custom: [], weights: '' };
+    if (!Array.isArray(d.equip.have)) d.equip.have = defaultHave();
+    if (!Array.isArray(d.equip.custom)) d.equip.custom = [];
+    if (typeof d.equip.weights !== 'string') d.equip.weights = '';
+    if (!d.variant || typeof d.variant !== 'object') d.variant = {};
     return d;
   }
   var S = load();
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* stockage plein ou bloqué */ } }
 
-  var ui = { prog: null, tab: 'home', track: 'poids', grp: 'Tous' };
+  var ui = { prog: null, tab: 'home', track: 'force', grp: 'Tous' };
   var deferredInstall = null;
 
   /* ---------- doses ---------- */
@@ -131,10 +129,9 @@
   function todayPain() { return S.pains.filter(function (p) { return p.d === today(); })[0]; }
   function recommendation(p) {
     if (!p) return null;
-    var m = Math.max(p.sci, p.knee);
-    if (m >= 7) return { lvl: 'bad', text: 'Douleur élevée aujourd\'hui : pas de séance. Marchez très doucement si c\'est confortable, changez souvent de position. Si cela dure plus de quelques jours, voyez votre médecin ou votre kiné.', session: null };
-    if (m >= 4) return { lvl: 'warn', text: 'Douleur modérée : faites plutôt la séance douce aujourd\'hui, et stoppez au moindre signe d\'aggravation.', session: 'douce' };
-    return { lvl: 'ok', text: 'Douleur faible : une séance complète est possible. Gardez la douleur à 3/10 maximum pendant l\'effort.', session: nextSession() };
+    if (p.gn >= 7) return { lvl: 'bad', text: 'Gêne ou douleur importante aujourd\'hui : pas de renforcement. Reposez-vous ou marchez doucement. Si cela dure, parlez-en à votre médecin.', session: null };
+    if (p.gn >= 4 || p.en <= 3) return { lvl: 'warn', text: 'Énergie basse ou gêne modérée : faites plutôt la séance douce, ou la séance express avec des charges plus légères.', session: 'douce' };
+    return { lvl: 'ok', text: 'Belle forme ! Une séance complète est possible aujourd\'hui.', session: nextSession() };
   }
   function nextSession() {
     var order = ['A', 'B', 'C'];
@@ -159,7 +156,7 @@
     }).join('');
     var h = '<h1>Bonjour' + (S.profile.name ? ' ' + esc(S.profile.name) : '') + ' 👋</h1>';
     h += '<section class="card"><h2>Comment vous sentez-vous aujourd\'hui ?</h2>' +
-      slider('sci', 'Douleur sciatique', p ? p.sci : 0) + slider('knee', 'Douleur au genou', p ? p.knee : 0) +
+      slider('en', 'Énergie du jour', p ? p.en : 6) + slider('gn', 'Gêne ou douleur', p ? p.gn : 0) +
       '<button class="btn primary big" data-act="savepain" style="margin-top:12px">' + (p ? 'Mettre à jour' : 'Enregistrer') + '</button>';
     if (rec) {
       h += '<div class="banner ' + rec.lvl + '">' + esc(rec.text) + '</div>';
@@ -168,7 +165,7 @@
     h += '</section>';
     h += '<section class="card"><div class="row sb"><h2>Cette semaine</h2><span class="pill">' + wkSessions.length + ' / 3 séances</span></div>' +
       '<div class="dots">' + dots + '</div>' +
-      '<p class="muted">Objectif : 3 séances et de la marche les autres jours. Un jour de repos entre deux séances de renforcement.</p></section>';
+      '<p class="muted">Objectif : 3 séances de renforcement par semaine, avec un jour de repos entre deux. Les autres jours : marche ou activité plaisir.</p></section>';
     h += '<button class="btn big" data-act="addact" style="margin-bottom:12px">➕ Ajouter une activité faite</button>';
     h += weightCard();
     if (deferredInstall) h += '<button class="btn big" data-act="install">📲 Installer l\'application sur le téléphone</button>';
@@ -180,23 +177,15 @@
       '<input class="rng" type="range" id="' + id + '" min="0" max="10" step="1" value="' + v + '">';
   }
   function sortedWeights() { return S.weights.slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; }); }
-  function sortedWaist() { return S.waist.slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; }); }
-  function fmtCm(v) { return (Math.round(v * 10) / 10).toString().replace('.', ',') + ' cm'; }
-  function signed(v) { var r = Math.round(v * 10) / 10; return (r > 0 ? '+' : '') + r.toString().replace('.', ','); }
   function weightCard() {
-    var w = sortedWeights(), wa = sortedWaist(), belly = '';
-    if (wa.length) {
-      var wl = wa[wa.length - 1], wd = wl.cm - wa[0].cm;
-      belly = '<div class="row sb" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><div><b>Tour de ventre : ' + fmtCm(wl.cm) + '</b><div class="muted">au ' + fmtDate(wl.d) + '</div></div>' +
-        (wa.length > 1 ? '<div style="text-align:right"><b>' + signed(wd) + ' cm</b><div class="muted">depuis le début</div></div>' : '') + '</div>';
-    }
-    if (!w.length) return '<section class="card"><h2>Poids</h2><p class="muted">Ajoutez votre poids dans l\'onglet Suivi pour voir votre progression.</p>' + belly + '</section>';
+    var w = sortedWeights();
+    if (!w.length) return '<section class="card"><h2>Poids</h2><p class="muted">Ajoutez votre poids dans l\'onglet Suivi. L\'objectif est qu\'il reste stable.</p></section>';
     var last = w[w.length - 1], first = w[0], diff = last.kg - first.kg;
-    var goal = num(S.profile.goal);
     var h = '<section class="card"><h2>Poids</h2><div class="row sb"><div><div class="big-num">' + fmtKg(last.kg) + '</div><div class="muted">au ' + fmtDate(last.d) + '</div></div>' +
       '<div style="text-align:right"><b>' + (diff > 0 ? '+' : '') + (Math.round(diff * 10) / 10).toString().replace('.', ',') + ' kg</b><div class="muted">depuis le début</div></div></div>';
-    if (goal) h += '<p class="muted">Objectif : ' + fmtKg(goal) + ' (reste ' + fmtKg(Math.max(0, last.kg - goal)) + ')</p>';
-    return h + belly + '</section>';
+    if (diff <= -2) h += '<div class="banner warn">Votre poids a baissé de plus de 2 kg. Mangez un peu plus (protéines à chaque repas) et parlez-en à votre médecin si cette baisse n\'est pas voulue.</div>';
+    else h += '<p class="muted">Poids stable : c\'est l\'objectif.</p>';
+    return h + '</section>';
   }
 
   function viewSessions() {
@@ -206,8 +195,8 @@
         '<p class="muted">' + esc(s.desc) + '</p><p class="muted">' + s.items.length + ' exercices · environ ' + estMinutes(s.items) + ' min</p>' +
         '<button class="btn primary" data-act="preview" data-id="' + s.id + '">Voir et démarrer</button></section>';
     });
-    h += '<section class="card"><h2>Semaine type</h2><ul class="t"><li>Lundi : séance A</li><li>Mardi : marche (20 à 30 min)</li><li>Mercredi : séance B</li><li>Jeudi : vélo ou piscine, ou marche</li><li>Vendredi : séance A</li><li>Samedi : séance C</li><li>Dimanche : repos</li></ul>' +
-      '<p class="muted">Les jours de douleur, remplacez par la séance douce.</p></section>';
+    h += '<section class="card"><h2>Semaine type</h2><ul class="t"><li>Lundi : séance A</li><li>Mardi : marche (20 à 30 min)</li><li>Mercredi : séance B</li><li>Jeudi : repos ou activité plaisir</li><li>Vendredi : séance C</li><li>Week-end : marche, vélo, jardin, danse…</li></ul>' +
+      '<p class="muted">Jours chargés : séance express. Jours de fatigue : séance douce.</p></section>';
     return h;
   }
 
@@ -222,56 +211,62 @@
     }).join('') + '</div>';
   }
 
+  function testSeries(id) {
+    return S.tests.filter(function (t) { return t.id === id; }).sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
+  }
   function viewTrack() {
-    var tabs = [['poids', 'Poids'], ['ventre', 'Ventre'], ['douleur', 'Douleurs'], ['prog', 'Progrès'], ['histo', 'Séances']];
+    var tabs = [['force', 'Force'], ['poids', 'Poids & mesures'], ['ress', 'Ressenti'], ['prog', 'Progrès'], ['histo', 'Séances']];
     var h = '<h1>Suivi</h1><div class="seg">' + tabs.map(function (t) {
       return '<button class="' + (ui.track === t[0] ? 'on' : '') + '" data-act="track" data-t="' + t[0] + '">' + t[1] + '</button>';
     }).join('') + '</div>';
-    if (ui.track === 'poids') {
+    if (ui.track === 'force') {
+      h += '<p class="muted">Refaites ces tests toutes les 4 à 6 semaines, dans les mêmes conditions. Le muscle se voit dans les chiffres bien avant la balance.</p>';
+      D.tests.forEach(function (t) {
+        var ser = testSeries(t.id), last = ser[ser.length - 1], first = ser[0];
+        h += '<section class="card"><h2>' + esc(t.name) + '</h2>';
+        if (last) {
+          var diff = last.v - first.v;
+          h += '<div class="row sb"><div><span class="big-num">' + last.v + '</span> <span class="muted">' + t.unit + '</span><div class="muted">au ' + fmtDate(last.d) + '</div></div>' +
+            (ser.length > 1 ? '<div style="text-align:right"><b>' + (diff > 0 ? '+' : '') + diff + ' ' + t.unit + '</b><div class="muted">depuis le début</div></div>' : '') + '</div>';
+          if (ser.length > 1) h += chart([{ name: t.name, color: '#9d3b6b', pts: ser.map(function (x) { return { x: x.d, y: x.v }; }) }], { label: 'Évolution : ' + t.name });
+        } else h += '<p class="muted">Pas encore de mesure.</p>';
+        h += '<details><summary>Comment faire le test</summary><p>' + esc(t.how) + '</p></details>' +
+          '<div class="row" style="margin-top:8px"><div class="grow"><input id="tv_' + t.id + '" type="text" inputmode="decimal" placeholder="Résultat (' + t.unit + ')" aria-label="Résultat ' + esc(t.name) + '"></div>' +
+          '<button class="btn primary" data-act="addtest" data-id="' + t.id + '">Ajouter</button></div></section>';
+      });
+    } else if (ui.track === 'poids') {
       var w = sortedWeights();
-      h += '<section class="card"><h2>Ajouter une pesée</h2><label for="wkg">Poids (kg)</label><input id="wkg" type="text" inputmode="decimal" placeholder="ex. 84,5">' +
+      h += '<section class="card"><h2>Ajouter une mesure</h2><label for="wkg">Poids (kg)</label><input id="wkg" type="text" inputmode="decimal" placeholder="ex. 62,5">' +
+        '<div class="row"><div class="grow"><label for="wwaist">Taille (cm)</label><input id="wwaist" type="text" inputmode="decimal" placeholder="facultatif"></div>' +
+        '<div class="grow"><label for="wthigh">Cuisse (cm)</label><input id="wthigh" type="text" inputmode="decimal" placeholder="facultatif"></div>' +
+        '<div class="grow"><label for="warm">Bras (cm)</label><input id="warm" type="text" inputmode="decimal" placeholder="facultatif"></div></div>' +
         '<button class="btn primary big" data-act="addweight" style="margin-top:12px">Enregistrer</button></section>';
-      h += '<section class="card"><h2>Évolution</h2>' + chart([{ name: 'Poids', color: '#0f766e', pts: w.map(function (x) { return { x: x.d, y: x.kg }; }) }], { dec: 1, label: 'Évolution du poids' });
-      var hgt = num(S.profile.height);
-      if (w.length && hgt && hgt > 100) {
-        var imc = w[w.length - 1].kg / Math.pow(hgt / 100, 2);
-        h += '<p class="muted">IMC actuel : ' + (Math.round(imc * 10) / 10).toString().replace('.', ',') + '</p>';
-      }
-      h += '</section>';
+      h += '<section class="card"><h2>Poids</h2>' + chart([{ name: 'Poids', color: '#9d3b6b', pts: w.map(function (x) { return { x: x.d, y: x.kg }; }) }], { dec: 1, label: 'Évolution du poids' }) +
+        '<p class="muted">Objectif : un poids stable. Les tours de cuisse et de bras peuvent augmenter légèrement quand le muscle se développe.</p></section>';
       h += '<section class="card"><h2>Historique</h2>' + (w.length ? '<ul class="list">' + w.slice().reverse().slice(0, 30).map(function (x) {
-        return '<li><div class="grow"><b>' + fmtKg(x.kg) + '</b>' + '<div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delweight" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
-      }).join('') + '</ul>' : '<p class="muted">Aucune pesée.</p>') + '</section>';
-    } else if (ui.track === 'ventre') {
-      var wa = sortedWaist();
-      h += '<section class="card"><h2>Ajouter une mesure</h2><label for="wcm">Tour de ventre (cm)</label><input id="wcm" type="text" inputmode="decimal" placeholder="ex. 98,5">' +
-        '<button class="btn primary big" data-act="addwaist" style="margin-top:12px">Enregistrer</button>' +
-        '<details><summary>Comment bien mesurer</summary><p>Debout, ventre relâché, mètre de couturière à plat au niveau du nombril (sans serrer ni creuser le ventre). Mesurez après une expiration normale, de préférence le matin, et toujours de la même façon.</p></details></section>';
-      h += '<section class="card"><h2>Évolution</h2>' + chart([{ name: 'Tour de ventre', color: '#b45309', pts: wa.map(function (x) { return { x: x.d, y: x.cm }; }) }], { dec: 1, label: 'Évolution du tour de ventre' });
-      if (wa.length > 1) {
-        var wl2 = wa[wa.length - 1], wp = wa[wa.length - 2];
-        h += '<div class="row sb" style="margin-top:8px"><div><b>' + signed(wl2.cm - wp.cm) + ' cm</b><div class="muted">depuis la mesure précédente</div></div>' +
-          '<div style="text-align:right"><b>' + signed(wl2.cm - wa[0].cm) + ' cm</b><div class="muted">depuis le début</div></div></div>';
-      }
-      h += '<p class="muted">Mesurez une fois par semaine, pas tous les jours : les variations d\'un jour à l\'autre sont normales. Une baisse régulière sur plusieurs semaines est un bon signe, même quand la balance bouge peu.</p></section>';
-      h += '<section class="card"><h2>Historique</h2>' + (wa.length ? '<ul class="list">' + wa.slice().reverse().slice(0, 30).map(function (x) {
-        return '<li><div class="grow"><b>' + fmtCm(x.cm) + '</b><div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delwaist" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
+        var extra = [x.waist ? 'taille ' + x.waist : '', x.thigh ? 'cuisse ' + x.thigh : '', x.arm ? 'bras ' + x.arm : ''].filter(Boolean).join(' · ');
+        return '<li><div class="grow"><b>' + fmtKg(x.kg) + '</b>' + (extra ? ' · ' + extra + ' cm' : '') + '<div class="muted">' + fmtDate(x.d) + '</div></div><button class="btn small danger" data-act="delweight" data-d="' + x.d + '" aria-label="Supprimer">🗑</button></li>';
       }).join('') + '</ul>' : '<p class="muted">Aucune mesure.</p>') + '</section>';
-    } else if (ui.track === 'douleur') {
+    } else if (ui.track === 'ress') {
       var p = S.pains.slice().sort(function (a, b) { return a.d < b.d ? -1 : 1; }).slice(-30);
-      h += '<section class="card"><h2>Douleurs (0 à 10)</h2>' + chart([
-        { name: 'Sciatique', color: '#d97706', pts: p.map(function (x) { return { x: x.d, y: x.sci }; }) },
-        { name: 'Genou', color: '#2563eb', pts: p.map(function (x) { return { x: x.d, y: x.knee }; }) }
-      ], { min: 0, max: 10, label: 'Évolution des douleurs' }) +
-        '<p class="muted">Enregistrez votre douleur chaque jour depuis l\'accueil. Montrez ce graphique à votre médecin ou kiné.</p></section>';
+      h += '<section class="card"><h2>Énergie et gêne (0 à 10)</h2>' + chart([
+        { name: 'Énergie', color: '#15803d', pts: p.map(function (x) { return { x: x.d, y: x.en }; }) },
+        { name: 'Gêne ou douleur', color: '#d97706', pts: p.map(function (x) { return { x: x.d, y: x.gn }; }) }
+      ], { min: 0, max: 10, label: 'Évolution du ressenti' }) +
+        '<p class="muted">Enregistrez votre ressenti depuis l\'accueil. Une énergie qui monte au fil des semaines est un très bon signe.</p></section>';
     } else if (ui.track === 'prog') {
       h += progHtml();
     } else {
       var tot = S.sessions.length, mins = S.sessions.reduce(function (a, s) { return a + (s.mins || 0); }, 0) + totalActMins();
       h += '<section class="card"><div class="row"><div class="grow"><div class="big-num">' + tot + '</div><div class="muted">séances</div></div><div class="grow"><div class="big-num">' + mins + '</div><div class="muted">minutes</div></div></div></section>';
       h += '<section class="card"><h2>Séances faites</h2>' + (tot ? '<ul class="list">' + S.sessions.slice().reverse().slice(0, 40).map(function (s) {
-        return '<li><div class="grow"><b>' + esc(s.name) + '</b><div class="muted">' + fmtDate(s.d) + ' · ' + s.mins + ' min' + (s.sci != null ? ' · douleur après : dos ' + s.sci + ', genou ' + s.knee : '') + '</div>' + detHtml(s) + '</div></li>';
+        return '<li><div class="grow"><b>' + esc(s.name) + '</b><div class="muted">' + fmtDate(s.d) + ' · ' + s.mins + ' min' + (s.en != null ? ' · après : énergie ' + s.en + ', gêne ' + s.gn : '') + '</div>' + detHtml(s) + '</div></li>';
       }).join('') + '</ul>' : '<p class="muted">Aucune séance pour l\'instant.</p>') + '</section>';
       h += actListHtml();
+      var ld = Object.keys(S.loads).filter(function (k) { return EX[k] && S.loads[k]; });
+      if (ld.length) h += '<section class="card"><h2>Mes charges actuelles</h2><ul class="list">' + ld.map(function (k) {
+        return '<li><div class="grow">' + esc(EX[k].name) + '</div><b>' + String(S.loads[k]).replace('.', ',') + ' kg</b></li>';
+      }).join('') + '</ul></section>';
     }
     return h;
   }
@@ -280,11 +275,12 @@
     var p = S.profile;
     return '<h1>Profil</h1><section class="card"><label for="pname">Prénom</label><input id="pname" type="text" value="' + esc(p.name) + '">' +
       '<label for="pheight">Taille (cm)</label><input id="pheight" type="text" inputmode="decimal" value="' + esc(p.height) + '">' +
-      '<label for="pgoal">Poids objectif (kg)</label><input id="pgoal" type="text" inputmode="decimal" step="0.1" value="' + esc(p.goal) + '">' +
-      '<label for="prest">Temps de repos entre séries</label><select id="prest">' + [30, 45, 60, 90].map(function (v) {
+      '<label for="page">Âge</label><input id="page" type="text" inputmode="numeric" value="' + esc(p.age) + '">' +
+      '<label for="prest">Temps de repos entre séries</label><select id="prest">' + [45, 60, 90, 120].map(function (v) {
         return '<option value="' + v + '"' + (S.settings.rest === v ? ' selected' : '') + '>' + v + ' secondes</option>';
       }).join('') + '</select>' +
       '<button class="btn primary big" data-act="saveprofile" style="margin-top:12px">Enregistrer</button></section>' +
+      equipCard() +
       '<section class="card"><h2>Écran et son</h2>' +
       '<label class="chk"><input type="checkbox" id="sawake"' + (S.settings.awake !== false ? ' checked' : '') + '> Garder l\'écran allumé quand l\'application est ouverte</label>' +
       '<label class="chk"><input type="checkbox" id="ssound"' + (S.settings.sound !== false ? ' checked' : '') + '> Bip à la fin du chrono et au changement de côté</label>' +
@@ -295,7 +291,59 @@
       '<section class="card"><button class="btn big" data-act="safety">🛟 Règles de sécurité</button>' +
       (deferredInstall ? '<button class="btn big" data-act="install" style="margin-top:10px">📲 Installer l\'application</button>' : '') +
       '<button class="btn big danger" data-act="reset" style="margin-top:10px">Effacer toutes mes données</button></section>' +
-      '<p class="muted" style="text-align:center">FitSanté v4 · ne remplace pas un avis médical</p>';
+      '<p class="muted" style="text-align:center">Vitalité 50+ v4 · ne remplace pas un avis médical</p>';
+  }
+
+  /* ---------- matériel et versions « avec / sans matériel » ---------- */
+  function eqInfo(id) { return (D.equipment || []).filter(function (e) { return e.id === id; })[0]; }
+  function eqShort(id) { var e = eqInfo(id); return e ? e.short : id; }
+  function hasEq(id) {
+    return S.equip.have.indexOf(id) >= 0 || S.equip.custom.some(function (c) { return c.type === id; });
+  }
+  function eqOK(ex) { return !ex.eq || ex.eq.some(hasEq); }
+  function eqNames(ex) { return ex.eq.map(eqShort).join(' ou '); }
+  function effNoEq(ex) {
+    var m = S.variant[ex.id];
+    if (m === 'eq') return false;
+    if (m === 'noeq') return true;
+    return !eqOK(ex);
+  }
+  var noeqCache = {};
+  function resolveEx(ex) {
+    if (!ex.eq || ex.dose.type === 'cardio' || !effNoEq(ex)) return ex;
+    if (ex.sub && EX[ex.sub]) return EX[ex.sub];
+    if (!noeqCache[ex.id]) noeqCache[ex.id] = Object.assign({}, ex, {
+      loaded: false, noeqView: true, name: ex.name + ' (sans matériel)',
+      steps: ex.noeq ? [ex.noeq].concat(ex.steps) : ex.steps
+    });
+    return noeqCache[ex.id];
+  }
+  function eqBlock(ex) {
+    if (!ex.eq) return '';
+    var have = eqOK(ex), miss = have ? '' : ' (non coché dans Profil)';
+    if (ex.dose.type === 'cardio') return '<div class="banner ' + (have ? 'ok' : 'warn') + '">🧰 Matériel : ' + esc(eqNames(ex)) + miss + '</div>';
+    var ne = effNoEq(ex);
+    return '<div class="banner ok">🧰 Matériel : ' + esc(eqNames(ex)) + miss + '</div>' +
+      '<label for="xvar">Version à faire</label><select id="xvar" data-id="' + ex.id + '"><option value="eq"' + (ne ? '' : ' selected') + '>Avec matériel</option><option value="noeq"' + (ne ? ' selected' : '') + '>Sans matériel</option></select>' +
+      (ex.noeq ? '<details' + (ne ? ' open' : '') + '><summary>Version sans matériel</summary><p>' + esc(ex.noeq) + (ex.sub && EX[ex.sub] ? ' Dans les séances, cet exercice est remplacé par « ' + esc(EX[ex.sub].name) + ' ».' : '') + '</p></details>' : '');
+  }
+  function equipCard() {
+    var eq = S.equip;
+    var h = '<section class="card"><h2>Mon matériel</h2><p class="muted">Cochez ce que vous avez à la maison. Quand un exercice demande du matériel que vous n\'avez pas, il passe automatiquement en version « sans matériel ». Vous pouvez aussi choisir la version à la main sur chaque exercice.</p>';
+    h += D.equipment.map(function (e) {
+      return '<label class="chk"><input type="checkbox" data-eq="' + e.id + '"' + (eq.have.indexOf(e.id) >= 0 ? ' checked' : '') + '> ' + esc(e.name) + '</label>';
+    }).join('');
+    h += '<label for="eqweights">Charges disponibles (kg), facultatif</label><input id="eqweights" type="text" maxlength="60" value="' + esc(eq.weights) + '" placeholder="ex. 2, 4, 8">';
+    h += '<h3>Ajouter un autre matériel</h3>';
+    if (eq.custom.length) h += '<ul class="list">' + eq.custom.map(function (c) {
+      var t = eqInfo(c.type);
+      return '<li><div class="grow"><b>' + esc(c.name) + '</b><div class="muted">' + (t ? 'compte comme : ' + esc(t.short) : 'noté seulement') + '</div></div><button class="btn small danger" data-act="delcustom" data-k="' + esc(c.k) + '" aria-label="Supprimer">🗑</button></li>';
+    }).join('') + '</ul>';
+    h += '<label for="cname">Nom (ex. kettlebell 8 kg)</label><input id="cname" type="text" maxlength="40">' +
+      '<label for="ctype">Il remplace…</label><select id="ctype">' + D.equipment.map(function (e) { return '<option value="' + e.id + '">' + esc(e.short) + '</option>'; }).join('') + '<option value="">rien (juste le noter)</option></select>' +
+      '<button class="btn big" data-act="addcustom" style="margin-top:10px">➕ Ajouter</button>' +
+      '<button class="btn big" data-act="resetvar" style="margin-top:8px">Remettre les versions en automatique</button></section>';
+    return h;
   }
 
   /* ---------- résultats réalisés, activités libres, progrès ---------- */
@@ -420,7 +468,7 @@
     return out.sort(function (a, b) { return a.d < b.d ? -1 : (a.d > b.d ? 1 : 0); });
   }
   function progHtml() {
-    var list = D.exos.filter(function (e) { return recs(e.id).length; });
+    var list = D.exos.filter(function (e) { return !e.warm && recs(e.id).length; });
     if (!list.length) return '<section class="card"><h2>Progrès</h2><p class="muted">Terminez une séance ou ajoutez une activité libre : vos résultats apparaîtront ici, exercice par exercice.</p></section>';
     if (!ui.prog || !list.some(function (e) { return e.id === ui.prog; })) ui.prog = list[0].id;
     var ex = EX[ui.prog], unit = unitOf(ex).trim(), rs = recs(ui.prog);
@@ -429,7 +477,7 @@
     var h = '<section class="card"><label for="pgx" style="margin-top:0">Exercice</label><select id="pgx">' + list.map(function (e) {
       return '<option value="' + e.id + '"' + (e.id === ui.prog ? ' selected' : '') + '>' + esc(e.name) + '</option>';
     }).join('') + '</select><h2 style="margin-top:14px">Total par séance (' + unit + ')</h2>' +
-      chart([{ name: ex.name, color: '#0f766e', pts: pts }], { label: 'Progrès : ' + ex.name }) +
+      chart([{ name: ex.name, color: '#9d3b6b', pts: pts }], { label: 'Progrès : ' + ex.name }) +
       '<div class="row sb" style="margin-top:8px"><div><b>' + best + ' ' + unit + '</b><div class="muted">meilleure série</div></div>' +
       (pts.length > 1 ? '<div style="text-align:right"><b>' + sgn(pts[pts.length - 1].y - pts[0].y) + ' ' + unit + '</b><div class="muted">depuis le début</div></div>' : '') + '</div></section>';
     h += '<section class="card"><h2>Dernières fois</h2><ul class="list">' + rs.slice(-8).reverse().map(function (r) {
@@ -463,8 +511,10 @@
       figBox(ex) + '<p><span class="pill">' + esc(ex.group) + '</span> <b>' + esc(doseLabel(ex.dose)) + '</b></p>' +
       '<h3>Comment faire</h3><ol>' + ex.steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
     if (ex.tips && ex.tips.length) h += '<div class="banner ok">💡 ' + esc(ex.tips.join(' ')) + '</div>';
+    h += eqBlock(ex);
     h += '<div class="banner bad">⚠️ <b>Arrêtez si :</b> ' + esc(ex.stop) + '</div>';
     h += '<details><summary>Version plus facile</summary><p>' + esc(ex.easier) + '</p></details>';
+    if (ex.harder) h += '<details><summary>Pour progresser</summary><p>' + esc(ex.harder) + '</p></details>';
     h += '<button class="btn big" data-act="addact" data-id="' + id + '" style="margin-bottom:8px">➕ Noter que je l\'ai fait</button>';
     h += '<a class="btn big" target="_blank" rel="noopener" href="' + esc(ytUrl(ex)) + '">▶ Voir des vidéos de cet exercice</a>';
     if (mine) h += '<a class="btn big" style="margin-top:8px" target="_blank" rel="noopener" href="' + esc(mine) + '">🎬 Ma vidéo (kiné)</a>';
@@ -474,14 +524,27 @@
   }
 
   function previewSheet(id) {
-    var s = sessionObj(id);
+    var s = sessionObj(id), adapted = 0, need = [];
+    var rs = s.items.map(function (it) {
+      var o = EX[it.id], r = resolveEx(o);
+      if (o.eq && o.dose.type !== 'cardio') {
+        if (effNoEq(o)) adapted++;
+        else o.eq.forEach(function (q) { if (hasEq(q) && eqInfo(q) && !eqInfo(q).def && need.indexOf(q) < 0) need.push(q); });
+      }
+      return { it: it, o: o, ex: r, warm: !!(it.w || o.warm) };
+    });
+    function row(r) {
+      var dd = doseOf(r.ex, r.ex.dose.type === r.o.dose.type ? r.it : null);
+      return '<li><button class="chip" data-act="exo" data-id="' + r.o.id + '" style="border:0;background:none;padding:0;text-align:left;flex:1"><b>' + r.ex.icon + ' ' + esc(r.ex.name) + '</b><div class="muted">' + esc(doseLabel(dd)) + '</div></button></li>';
+    }
+    var warm = rs.filter(function (r) { return r.warm; }), main = rs.filter(function (r) { return !r.warm; });
     var h = '<div class="top"><h2 style="margin:0">' + esc(s.name) + '</h2><button class="x" data-act="close" aria-label="Fermer">✕</button></div>' +
-      '<p class="muted">' + esc(s.desc) + ' Environ ' + estMinutes(s.items) + ' min.</p><ul class="list">' +
-      s.items.map(function (it) {
-        var ex = EX[it.id];
-        return '<li><button class="chip" data-act="exo" data-id="' + ex.id + '" style="border:0;background:none;padding:0;text-align:left;flex:1"><b>' + ex.icon + ' ' + esc(ex.name) + '</b><div class="muted">' + esc(doseLabel(doseOf(ex, it))) + '</div></button></li>';
-      }).join('') + '</ul>' +
-      '<div class="banner warn">Échauffez-vous, restez à 3/10 de douleur maximum et arrêtez si la douleur descend dans la jambe.</div>' +
+      '<p class="muted">' + esc(s.desc) + ' Environ ' + estMinutes(s.items) + ' min.</p>';
+    if (need.length) h += '<p class="muted">🧰 Matériel utilisé : ' + esc(need.map(eqShort).join(', ')) + '</p>';
+    if (adapted) h += '<p class="muted">♻️ ' + adapted + ' exercice(s) adapté(s) sans matériel (modifiable dans Profil → Mon matériel).</p>';
+    if (warm.length) h += '<h3>🔥 Échauffement</h3><ul class="list">' + warm.map(row).join('') + '</ul>';
+    h += '<h3>' + (warm.length ? '💪 Séance' : 'Exercices') + '</h3><ul class="list">' + main.map(row).join('') + '</ul>' +
+      '<div class="banner warn">Soufflez à l\'effort, choisissez des charges qui rendent les deux dernières répétitions difficiles et arrêtez en cas de douleur vive.</div>' +
       '<button class="btn primary big" data-act="start" data-id="' + id + '">▶ Démarrer la séance</button>';
     openSheet(h);
   }
@@ -493,13 +556,12 @@
       '<h3>Les règles d\'or</h3><ul class="t">' + sf.rules.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>' +
       '<h3>À éviter</h3><ul class="t">' + sf.avoid.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>' +
       '<h3>Consulter sans attendre</h3><div class="banner bad">' + sf.urgent.map(function (r) { return '<p>' + esc(r) + '</p>'; }).join('') + '</div>' +
-      '<h3>Perte de poids</h3><p>' + esc(sf.weight) + '</p>';
+      '<h3>Alimentation et poids</h3><p>' + esc(sf.food) + '</p>';
     if (first) {
       h += '<h3>Votre profil (modifiable plus tard)</h3><label for="onname">Prénom</label><input id="onname" type="text">' +
         '<div class="row"><div class="grow"><label for="onh">Taille (cm)</label><input id="onh" type="text" inputmode="decimal"></div>' +
         '<div class="grow"><label for="onw">Poids (kg)</label><input id="onw" type="text" inputmode="decimal" step="0.1"></div></div>' +
-        '<label for="onv">Tour de ventre (cm), facultatif</label><input id="onv" type="text" inputmode="decimal">' +
-        '<label for="ong">Poids objectif (kg)</label><input id="ong" type="text" inputmode="decimal" step="0.1">' +
+        '<label for="ong">Âge</label><input id="ong" type="text" inputmode="decimal" step="0.1">' +
         '<button class="btn primary big" style="margin-top:16px" data-act="ack">J\'ai compris, commencer</button>';
     } else h += '<button class="btn big" data-act="close" style="margin-top:12px">Fermer</button>';
     openSheet(h, first);
@@ -576,7 +638,10 @@
   }
   function startSession(id) {
     var s = sessionObj(id);
-    P = { sid: id, name: s.name, items: s.items.map(function (it) { return { ex: EX[it.id], dose: doseOf(EX[it.id], it) }; }),
+    P = { sid: id, name: s.name, items: s.items.map(function (it) {
+        var o = EX[it.id], r = resolveEx(o);
+        return { ex: r, orig: o, warm: !!(it.w || o.warm), dose: doseOf(r, r.dose.type === o.dose.type ? it : null) };
+      }),
       i: 0, set: 1, mode: 'ready', t: 0, total: 0, side: false, sideDone: false, end: 0, lastBeep: null, started: Date.now(), done: [], res: {} };
     requestWake();
     renderPlayer();
@@ -597,6 +662,12 @@
     }
     renderPlayer();
   }
+  function saveLoad() {
+    var el = $('#pload');
+    if (!el || !P) return;
+    var v = num(el.value);
+    if (v != null && v >= 0 && v <= 100) { S.loads[P.items[P.i].ex.id] = v; save(); }
+  }
   function nextEx() {
     stopTick(); P.i += 1; P.set = 1; P.mode = P.i >= P.items.length ? 'done' : 'ready'; renderPlayer();
   }
@@ -605,14 +676,14 @@
     var n = P.items.length;
     if (P.mode === 'done') {
       var mins = Math.max(1, Math.round((Date.now() - P.started) / 60000));
-      var tp = todayPain() || { sci: 0, knee: 0 };
+      var tp = todayPain() || { en: 6, gn: 0 };
       openSheet('<h2>🎉 Séance terminée !</h2><p>' + P.done.length + ' exercice(s) faits en ' + mins + ' min. Bravo, la régularité est ce qui compte.</p>' +
-        '<div class="card">' + slider('sci', 'Douleur sciatique maintenant', tp.sci) + slider('knee', 'Douleur au genou maintenant', tp.knee) + '</div>' +
+        '<div class="card">' + slider('en', 'Énergie maintenant', tp.en) + slider('gn', 'Gêne ou douleur maintenant', tp.gn) + '</div>' +
         '<button class="btn primary big" data-act="finish">Enregistrer la séance</button>', true);
       return;
     }
     var it = P.items[P.i], ex = it.ex, d = it.dose;
-    var h = '<div class="top"><div class="grow"><b>' + esc(P.name) + '</b><div class="muted">Exercice ' + (P.i + 1) + ' sur ' + n + '</div></div><button class="x" data-act="quit" aria-label="Quitter">✕</button></div>' +
+    var h = '<div class="top"><div class="grow"><b>' + esc(P.name) + '</b><div class="muted">Exercice ' + (P.i + 1) + ' sur ' + n + (it.warm ? ' · <b>🔥 Échauffement</b>' : '') + '</div></div><button class="x" data-act="quit" aria-label="Quitter">✕</button></div>' +
       '<div class="bar"><i style="width:' + Math.round(P.i / n * 100) + '%"></i></div>';
     if (P.mode === 'rest') {
       var next = ex;
@@ -622,10 +693,19 @@
     } else {
       h += '<h2>' + ex.icon + ' ' + esc(ex.name) + '</h2>' + figBox(ex) +
         '<p style="text-align:center"><b>' + esc(doseLabel(d)) + '</b>' + (d.type !== 'cardio' ? ' · série ' + P.set + '/' + d.sets : '') + '</p>';
+      if (ex.loaded) {
+        var lk = S.loads[ex.id];
+        h += '<div class="card" style="padding:10px"><label for="pload" style="margin:0 0 4px">Charge utilisée (kg)</label><input id="pload" type="text" inputmode="decimal" value="' + (lk != null ? esc(String(lk).replace('.', ',')) : '') + '" placeholder="ex. 3">' +
+          '<div class="muted" style="margin-top:4px">' + (lk != null ? 'Dernière fois : ' + String(lk).replace('.', ',') + ' kg. Si les dernières répétitions étaient faciles, ajoutez 0,5 à 1 kg.' : 'Choisissez une charge qui rend les deux dernières répétitions difficiles.') + (S.equip.weights ? ' Vos charges : ' + esc(S.equip.weights) + ' kg.' : '') + '</div></div>';
+      }
       if (d.type === 'cardio' && d.mins >= 10 && P.mode === 'ready') {
-        h += '<label for="palt" style="margin:0 0 4px">Activité du jour</label><select id="palt" style="margin-bottom:10px">' + D.exos.filter(function (e) { return e.dose.type === 'cardio'; }).map(function (e) {
+        h += '<label for="palt" style="margin:0 0 4px">Activité du jour</label><select id="palt" style="margin-bottom:10px">' + D.exos.filter(function (e) { return e.dose.type === 'cardio' && (eqOK(e) || e.id === ex.id); }).map(function (e) {
           return '<option value="' + e.id + '"' + (e.id === ex.id ? ' selected' : '') + '>' + esc(e.name) + '</option>';
         }).join('') + '</select>';
+      }
+      if (it.orig && it.orig.eq && d.type !== 'cardio' && P.mode === 'ready') {
+        var ne = effNoEq(it.orig);
+        h += '<label for="pvar" style="margin:0 0 4px">Version</label><select id="pvar" style="margin-bottom:10px"><option value="eq"' + (ne ? '' : ' selected') + '>Avec matériel (' + esc(eqNames(it.orig)) + ')</option><option value="noeq"' + (ne ? ' selected' : '') + '>Sans matériel</option></select>';
       }
       var plan = plannedOf(d), pl = d.type === 'reps' ? 'Répétitions réalisées' : (d.type === 'time' ? 'Secondes réalisées' : 'Minutes réalisées');
       if (d.perSide && d.type !== 'cardio') pl += ' (par côté)';
@@ -642,7 +722,7 @@
           '<button class="btn big" data-act="setdone" style="margin-top:8px">✔ Déjà fait</button>';
       }
       h += '<details><summary>Comment faire</summary><ol>' + ex.steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol></details>' +
-        '<details><summary>Ça fait mal ? Version plus facile</summary><p>' + esc(ex.easier) + '</p><p><b>Arrêtez si :</b> ' + esc(ex.stop) + '</p></details>' +
+        '<details><summary>Trop dur ? Trop facile ?</summary><p><b>Plus facile :</b> ' + esc(ex.easier) + '</p>' + (ex.harder ? '<p><b>Plus difficile :</b> ' + esc(ex.harder) + '</p>' : '') + '<p><b>Arrêtez si :</b> ' + esc(ex.stop) + '</p></details>' +
         '<div class="row" style="margin-top:8px"><a class="btn grow" target="_blank" rel="noopener" href="' + esc(ytUrl(ex)) + '">▶ Vidéo</a><button class="btn grow" data-act="skip">Passer l\'exercice</button></div>';
     }
     openSheet(h, true);
@@ -659,32 +739,28 @@
     safety: function () { safetySheet(false); },
     start: function (el) { startSession(el.dataset.id); },
     savepain: function () {
-      var sci = +$('#view #sci').value, knee = +$('#view #knee').value, t = today();
+      var en = +$('#view #en').value, gn = +$('#view #gn').value, t = today();
       S.pains = S.pains.filter(function (p) { return p.d !== t; });
-      S.pains.push({ d: t, sci: sci, knee: knee }); save(); render();
+      S.pains.push({ d: t, en: en, gn: gn }); save(); render();
     },
     addweight: function () {
       var kg = num($('#wkg').value);
       if (!kg || kg < 30 || kg > 300) { alert('Entrez un poids valide (en kg).'); return; }
       var t = today();
       S.weights = S.weights.filter(function (w) { return w.d !== t; });
-      S.weights.push({ d: t, kg: kg }); save(); render();
+      S.weights.push({ d: t, kg: kg, waist: num($('#wwaist').value) || null, thigh: num($('#wthigh').value) || null, arm: num($('#warm').value) || null }); save(); render();
     },
-    addwaist: function () {
-      var cm = num($('#wcm').value);
-      if (!cm || cm < 40 || cm > 250) { alert('Entrez un tour de ventre valide (en cm).'); return; }
-      var t = today();
-      S.waist = S.waist.filter(function (x) { return x.d !== t; });
-      S.waist.push({ d: t, cm: cm }); save(); render();
-    },
-    delwaist: function (el) {
-      if (confirm('Supprimer cette mesure ?')) { S.waist = S.waist.filter(function (x) { return x.d !== el.dataset.d; }); save(); render(); }
+    addtest: function (el) {
+      var id = el.dataset.id, v = num($('#tv_' + id).value), t = today();
+      if (v == null || v < 0 || v > 1000) { alert('Entrez un résultat valide.'); return; }
+      S.tests = S.tests.filter(function (x) { return !(x.id === id && x.d === t); });
+      S.tests.push({ d: t, id: id, v: v }); save(); render();
     },
     delweight: function (el) {
       if (confirm('Supprimer cette pesée ?')) { S.weights = S.weights.filter(function (w) { return w.d !== el.dataset.d; }); save(); render(); }
     },
     saveprofile: function () {
-      S.profile.name = $('#pname').value.trim(); S.profile.height = $('#pheight').value; S.profile.goal = $('#pgoal').value;
+      S.profile.name = $('#pname').value.trim(); S.profile.height = $('#pheight').value; S.profile.age = $('#page').value;
       S.settings.rest = +$('#prest').value; save(); render(); alert('Profil enregistré ✔');
     },
     savevideo: function (el) {
@@ -695,20 +771,18 @@
     },
     ack: function () {
       var w = num($('#onw').value), t = today();
-      S.profile.name = $('#onname').value.trim(); S.profile.height = $('#onh').value; S.profile.goal = $('#ong').value;
-      if (w && w >= 30 && w <= 300) S.weights.push({ d: t, kg: w });
-      var v = num($('#onv').value);
-      if (v && v >= 40 && v <= 250) S.waist.push({ d: t, cm: v });
+      S.profile.name = $('#onname').value.trim(); S.profile.height = $('#onh').value; S.profile.age = $('#ong').value;
+      if (w && w >= 30 && w <= 300) S.weights.push({ d: t, kg: w, waist: null });
       S.settings.ack = true; save(); closeSheet(); render();
     },
     export: function () {
       var blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
-      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fitsante-sauvegarde-' + today() + '.json';
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vitalite-sauvegarde-' + today() + '.json';
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
     },
     import: function () { $('#file').click(); },
     reset: function () {
-      if (confirm('Effacer toutes vos données (poids, douleurs, séances) ? Action irréversible.')) {
+      if (confirm('Effacer toutes vos données (poids, ressenti, tests, séances) ? Action irréversible.')) {
         try { localStorage.removeItem(KEY); } catch (e) { /* ignoré */ }
         S = defaults(); safetyFirst(); render();
       }
@@ -740,6 +814,18 @@
     delact: function (el) {
       if (confirm('Supprimer cette activité ?')) { S.activities = S.activities.filter(function (a) { return a.k !== el.dataset.k; }); save(); render(); }
     },
+    addcustom: function () {
+      var name = $('#cname').value.trim().slice(0, 40);
+      if (!name) { alert('Indiquez le nom du matériel.'); return; }
+      S.equip.custom.push({ k: String(Date.now()), name: name, type: $('#ctype').value });
+      save(); render(); toast('✔ Matériel ajouté : ' + name);
+    },
+    delcustom: function (el) {
+      if (confirm('Supprimer ce matériel ?')) { S.equip.custom = S.equip.custom.filter(function (c) { return c.k !== el.dataset.k; }); save(); render(); }
+    },
+    resetvar: function () {
+      if (confirm('Remettre toutes les versions « avec / sans matériel » en automatique ?')) { S.variant = {}; save(); toast('✔ Versions remises en automatique'); }
+    },
     testsound: function () { unlockAudio(); sideSignal(); setTimeout(endSignal, 1100); },
     install: function () {
       if (!deferredInstall) return;
@@ -749,7 +835,7 @@
     /* lecteur */
     setdone: function () {
       var v = readDone(false); if (v === null) return;
-      stopTick(); recordSet(v); finishSet();
+      saveLoad(); stopTick(); recordSet(v); finishSet();
     },
     tstart: function () {
       var d = P.items[P.i].dose;
@@ -760,14 +846,14 @@
     tstop: function () { stopTick(); P.mode = 'ready'; renderPlayer(); },
     restplus: function () { P.end += 15000; P.t = remaining(); showTime(); },
     restskip: function () { stopTick(); P.mode = 'ready'; renderPlayer(); },
-    skip: function () { if (confirm('Passer cet exercice ?')) nextEx(); },
+    skip: function () { if (confirm('Passer cet exercice ?')) { saveLoad(); nextEx(); } },
     quit: function () {
       if (confirm('Quitter la séance ? Votre progression ne sera pas enregistrée.')) endPlayer();
     },
     finish: function () {
-      var sci = +$('#overlay #sci').value, knee = +$('#overlay #knee').value, t = today();
-      S.sessions.push({ d: t, id: P.sid, name: P.name, mins: Math.max(1, Math.round((Date.now() - P.started) / 60000)), n: P.done.length, det: buildDet(), sci: sci, knee: knee });
-      if (!todayPain()) S.pains.push({ d: t, sci: sci, knee: knee });
+      var en = +$('#overlay #en').value, gn = +$('#overlay #gn').value, t = today();
+      S.sessions.push({ d: t, id: P.sid, name: P.name, mins: Math.max(1, Math.round((Date.now() - P.started) / 60000)), n: P.done.length, det: buildDet(), en: en, gn: gn });
+      if (!todayPain()) S.pains.push({ d: t, en: en, gn: gn });
       save(); endPlayer();
     }
   };
@@ -784,6 +870,17 @@
     }
   });
   document.addEventListener('change', function (e) {
+    if (e.target.dataset && e.target.dataset.eq) {
+      var q = e.target.dataset.eq, i = S.equip.have.indexOf(q);
+      if (e.target.checked && i < 0) S.equip.have.push(q);
+      if (!e.target.checked && i >= 0) S.equip.have.splice(i, 1);
+      save(); return;
+    }
+    if (e.target.id === 'eqweights') { S.equip.weights = e.target.value.trim().slice(0, 60); save(); return; }
+    if (e.target.id === 'xvar') { S.variant[e.target.dataset.id] = e.target.value; save(); exoSheet(e.target.dataset.id); return; }
+    if (e.target.id === 'pvar' && P) {
+      var cur = P.items[P.i]; S.variant[cur.orig.id] = e.target.value; save(); cur.ex = resolveEx(cur.orig); renderPlayer(); return;
+    }
     if (e.target.id === 'aex') { $('#afields').innerHTML = actFields(e.target.value); return; }
     if (e.target.id === 'pgx') { ui.prog = e.target.value; render(); return; }
     if (e.target.id === 'palt' && P) { P.items[P.i].ex = EX[e.target.value]; renderPlayer(); return; }
@@ -796,7 +893,7 @@
         var j = JSON.parse(fr.result);
         if (!j || !Array.isArray(j.weights) || !Array.isArray(j.sessions)) throw new Error('format');
         if (!confirm('Remplacer vos données actuelles par cette sauvegarde ?')) return;
-        S = Object.assign(defaults(), j); migrateWaist(S); save(); render(); alert('Sauvegarde importée ✔');
+        S = Object.assign(defaults(), j); save(); render(); alert('Sauvegarde importée ✔');
       } catch (err) { alert('Fichier non valide.'); }
     };
     fr.readAsText(e.target.files[0]);
